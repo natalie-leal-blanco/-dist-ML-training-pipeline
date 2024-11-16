@@ -6,11 +6,13 @@ import boto3
 from typing import Dict, Any
 
 class DistributedTrainer:
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], distributed: bool = False):
         self.config = config
         self.s3_client = boto3.client('s3')
-        self.setup_distributed()
-        
+        self.distributed = distributed
+        if distributed:
+            self.setup_distributed()
+    
     def setup_distributed(self) -> None:
         """Initialize distributed training setup."""
         if torch.cuda.is_available():
@@ -19,15 +21,17 @@ class DistributedTrainer:
         else:
             dist.init_process_group(backend='gloo')
     
-    def load_model(self, model: torch.nn.Module) -> DistributedDataParallel:
+    def load_model(self, model: torch.nn.Module) -> torch.nn.Module:
         """Wrap model for distributed training."""
         if torch.cuda.is_available():
             model = model.cuda()
-        return DistributedDataParallel(model)
+        if self.distributed:
+            return DistributedDataParallel(model)
+        return model
     
     def save_checkpoint(self, model: torch.nn.Module, epoch: int) -> None:
         """Save model checkpoint to S3."""
-        if dist.get_rank() == 0:  # Only save on main process
+        if not self.distributed or (self.distributed and dist.get_rank() == 0):
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -35,32 +39,10 @@ class DistributedTrainer:
             path = f'/tmp/checkpoint_{epoch}.pt'
             torch.save(checkpoint, path)
             
-            # Upload to S3
             self.s3_client.upload_file(
                 path,
                 self.config['checkpoint_bucket'],
                 f'checkpoints/epoch_{epoch}.pt'
             )
-            os.remove(path)  # Clean up local file
-    
-    def train_epoch(self, model: torch.nn.Module, 
-                    dataloader: torch.utils.data.DataLoader,
-                    optimizer: torch.optim.Optimizer,
-                    criterion: torch.nn.Module) -> float:
-        """Train for one epoch."""
-        model.train()
-        total_loss = 0.0
-        
-        for batch_idx, (data, target) in enumerate(dataloader):
-            if torch.cuda.is_available():
-                data, target = data.cuda(), target.cuda()
-                
-            optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-            
-        return total_loss / len(dataloader)
+            if os.path.exists(path):
+                os.remove(path)
