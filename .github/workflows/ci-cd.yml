@@ -52,6 +52,13 @@ jobs:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
+
+    - name: Setup AWS resources
+      env:
+        TEST_DATA_BUCKET: ${{ secrets.TEST_DATA_BUCKET }}
+        TEST_CHECKPOINT_BUCKET: ${{ secrets.TEST_CHECKPOINT_BUCKET }}
+      run: |
+        python scripts/setup_aws.py
     
     - name: Run integration tests
       env:
@@ -60,24 +67,3 @@ jobs:
         TEST_CHECKPOINT_BUCKET: ${{ secrets.TEST_CHECKPOINT_BUCKET }}
       run: |
         python -m pytest tests/integration -v
-
-  deploy:
-    needs: [test, integration]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
-    
-    - name: Deploy infrastructure
-      working-directory: ./infrastructure/terraform
-      run: |
-        terraform init
-        terraform apply -auto-approve
