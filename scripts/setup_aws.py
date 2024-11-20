@@ -15,10 +15,8 @@ def setup_aws_resources():
         
         for bucket in buckets:
             try:
-                s3.create_bucket(
-                    Bucket=bucket,
-                    CreateBucketConfiguration={'LocationConstraint': 'us-east-1'}
-                )
+                # For us-east-1, don't specify LocationConstraint
+                s3.create_bucket(Bucket=bucket)
                 print(f"Created bucket: {bucket}")
             except s3.exceptions.BucketAlreadyExists:
                 print(f"Bucket already exists: {bucket}")
