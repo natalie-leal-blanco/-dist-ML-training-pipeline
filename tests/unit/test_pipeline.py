@@ -11,12 +11,22 @@ class SimpleModel(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(6 * 53 * 53, 10)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        # Calculate the correct input features for the fully connected layer
+        # For 224x224 input: After conv1 and pool: 110x110
+        # After conv2 and pool: 53x53
+        # Therefore: 16 channels * 53 * 53
+        self.fc1 = nn.Linear(16 * 53 * 53, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
     def forward(self, x):
         x = self.pool(torch.relu(self.conv1(x)))
-        x = x.view(-1, 6 * 53 * 53)
-        x = self.fc1(x)
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 53 * 53)
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
         return x
 
 @pytest.fixture
@@ -82,3 +92,4 @@ def test_model_validation(training_config, mock_s3):
     assert isinstance(val_loss, float)
     assert isinstance(accuracy, float)
     assert 0 <= accuracy <= 100
+    assert not torch.isnan(torch.tensor(val_loss))
