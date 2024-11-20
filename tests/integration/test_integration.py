@@ -1,8 +1,8 @@
 import pytest
 import boto3
 import torch
-from src.pipeline.trainer import DistributedTrainer
 from src.pipeline.data_loader import create_dataloaders
+from src.pipeline.trainer import DistributedTrainer
 import os
 
 @pytest.mark.integration
@@ -20,9 +20,27 @@ def test_data_loading():
     """Test actual data loading from S3"""
     if not os.getenv('INTEGRATION_TESTS'):
         pytest.skip("Skipping integration tests")
-        
+    
+    # Create multiple dummy files to match batch size
+    s3 = boto3.client('s3')
+    bucket = os.getenv('TEST_DATA_BUCKET')
+    
+    # Upload multiple dummy files
+    dummy_data = b"dummy data"
+    for i in range(4):  # Match batch size
+        s3.put_object(
+            Bucket=bucket,
+            Key=f'train/class_0/dummy{i}.jpg',
+            Body=dummy_data
+        )
+        s3.put_object(
+            Bucket=bucket,
+            Key=f'val/class_0/dummy{i}.jpg',
+            Body=dummy_data
+        )
+    
     config = {
-        'data_bucket': os.getenv('TEST_DATA_BUCKET'),
+        'data_bucket': bucket,
         'batch_size': 4,
         'num_workers': 0
     }
@@ -30,10 +48,11 @@ def test_data_loading():
     train_loader, val_loader = create_dataloaders(config)
     
     # Test data loader functionality
-    for data, labels in train_loader:
-        assert data.shape[0] == config['batch_size']
-        assert len(labels) == config['batch_size']
-        break
+    batch = next(iter(train_loader))
+    data, labels = batch
+    
+    assert data.shape[0] == config['batch_size']
+    assert len(labels) == config['batch_size']
 
 @pytest.mark.integration
 def test_model_checkpointing():
