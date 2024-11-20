@@ -2,10 +2,8 @@ import pytest
 import torch
 import torch.nn as nn
 from src.pipeline.trainer import DistributedTrainer
-from src.pipeline.data_loader import create_dataloaders
 import tempfile
 import os
-import boto3
 from unittest.mock import MagicMock, patch
 
 class SimpleModel(nn.Module):
@@ -41,7 +39,6 @@ def training_config():
 
 def test_full_training_pipeline(training_config, mock_s3):
     """Test complete training pipeline including model training and checkpointing"""
-    # Setup trainer
     trainer = DistributedTrainer(training_config, distributed=False)
     
     # Create mock data
@@ -54,7 +51,7 @@ def test_full_training_pipeline(training_config, mock_s3):
     optimizer = torch.optim.SGD(model.parameters(), lr=training_config['learning_rate'])
     criterion = nn.CrossEntropyLoss()
     
-    # Mock training step
+    # Test training step
     loss = trainer.train_step(model, (mock_data, mock_labels), optimizer, criterion)
     
     # Verify training produces expected outputs
@@ -62,12 +59,8 @@ def test_full_training_pipeline(training_config, mock_s3):
     assert not torch.isnan(torch.tensor(loss))
     
     # Test checkpoint saving
-    with tempfile.TemporaryDirectory() as tmpdir:
-        checkpoint_path = os.path.join(tmpdir, 'checkpoint.pt')
-        trainer.save_checkpoint(model, epoch=1)
-        
-        # Verify S3 upload was called
-        mock_s3.upload_file.assert_called_once()
+    trainer.save_checkpoint(model, epoch=1)
+    mock_s3.upload_file.assert_called_once()
 
 def test_model_validation(training_config, mock_s3):
     """Test model validation functionality"""
@@ -79,8 +72,11 @@ def test_model_validation(training_config, mock_s3):
     mock_data = torch.randn(batch_size, 3, 224, 224)
     mock_labels = torch.randint(0, 10, (batch_size,))
     
+    # Create validation loader with single batch
+    val_loader = [(mock_data, mock_labels)]
+    
     # Perform validation
-    val_loss, accuracy = trainer.validate(model, [(mock_data, mock_labels)])
+    val_loss, accuracy = trainer.validate(model, val_loader)
     
     # Verify validation metrics
     assert isinstance(val_loss, float)
