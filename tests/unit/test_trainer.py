@@ -34,3 +34,4 @@ def test_save_checkpoint(trainer_config, tmp_path):
     
     # This should not raise any errors
     trainer.save_checkpoint(model, epoch=1)
+    

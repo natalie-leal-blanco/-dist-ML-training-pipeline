@@ -20,19 +20,49 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
         pip install -r requirements.txt
+        pip install pytest pytest-cov
     
-    - name: List directory structure
+    - name: Run unit tests
       run: |
-        ls -R
-        
-    - name: Run tests
+        python -m pytest tests/unit -v --cov=src/
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Run integration tests
+      env:
+        INTEGRATION_TESTS: 'true'
+        TEST_DATA_BUCKET: ${{ secrets.TEST_DATA_BUCKET }}
+        TEST_CHECKPOINT_BUCKET: ${{ secrets.TEST_CHECKPOINT_BUCKET }}
       run: |
-        python -m pytest tests/ -v
+        python -m pytest tests/integration -v
 
   deploy:
-    needs: test
+    needs: [test, integration]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     
@@ -45,3 +75,9 @@ jobs:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
+    
+    - name: Deploy infrastructure
+      working-directory: ./infrastructure/terraform
+      run: |
+        terraform init
+        terraform apply -auto-approve
