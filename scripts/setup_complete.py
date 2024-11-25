@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import subprocess
 import sys
 import time
@@ -22,17 +24,18 @@ def main():
         ("python scripts/create_iam_policy.py", "Setting up IAM policy"),
         ("sleep 10", "Waiting for policy to propagate"),
         ("python scripts/deploy.py --config config/production.yml", "Deploying infrastructure"),
-        ("python scripts/validate_deployment.py --config config/production.yml --verbose", "Validating deployment")
+        ("sleep 5", "Waiting for resources to propagate"),
+        ("python scripts/validate_deployment.py --config config/production.yml", "Validating deployment")
     ]
     
     for command, description in steps:
         if not run_step(command, description):
             print(f"\n❌ Setup failed at: {description}")
             print("\nTroubleshooting steps:")
-            print("1. Run 'aws configure' to set up credentials")
-            print("2. Verify your AWS access keys are correct")
-            print("3. Check your IAM user has sufficient permissions")
-            print("4. Try running the specific failed step individually")
+            print("1. Check the error messages above")
+            print("2. Verify your AWS credentials")
+            print("3. Check resource permissions")
+            print("4. Try running the failed step individually")
             sys.exit(1)
     
     print("\n✅ Setup completed successfully!")

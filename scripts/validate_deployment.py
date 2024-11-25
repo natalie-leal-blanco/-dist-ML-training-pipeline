@@ -1,151 +1,113 @@
+#!/usr/bin/env python3
+
+import sys
 import boto3
 import argparse
 import yaml
-from typing import Dict, List, Tuple
-import json
 from pathlib import Path
 
-class DeploymentValidator:
-    def __init__(self, config_path: str):
+def validate_resources(config_path):
+    """Validate deployed AWS resources"""
+    try:
+        # Load configuration
         with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+            config = yaml.safe_load(f)
+
+        # Initialize AWS clients
+        s3 = boto3.client('s3')
+        ecs = boto3.client('ecs')
+        cloudwatch = boto3.client('cloudwatch')
+
+        print("\nDeployment Validation Results:")
+        print("=============================")
         
-        self.clients = {
-            's3': boto3.client('s3'),
-            'ecs': boto3.client('ecs'),
-            'cloudwatch': boto3.client('cloudwatch'),
-            'logs': boto3.client('logs')
-        }
-        
-    def validate_s3_buckets(self) -> Tuple[bool, Dict[str, str]]:
-        """Validate S3 buckets exist and are accessible"""
-        bucket_prefix = self.config['infrastructure']['storage']['s3_bucket_prefix']
-        expected_buckets = [
+        # Validate S3 buckets
+        bucket_prefix = config['infrastructure']['storage']['s3_bucket_prefix']
+        buckets = [
             f"{bucket_prefix}-data",
             f"{bucket_prefix}-checkpoints",
             f"{bucket_prefix}-logs"
         ]
         
-        results = {}
-        for bucket in expected_buckets:
+        print("\nChecking S3 Buckets:")
+        all_buckets_exist = True
+        for bucket in buckets:
             try:
-                self.clients['s3'].head_bucket(Bucket=bucket)
-                results[bucket] = "OK"
+                s3.head_bucket(Bucket=bucket)
+                print(f"✅ {bucket}: EXISTS")
             except Exception as e:
-                results[bucket] = str(e)
-        
-        return all(status == "OK" for status in results.values()), results
+                print(f"❌ {bucket}: {str(e)}")
+                all_buckets_exist = False
 
-    def validate_ecs_cluster(self) -> Tuple[bool, str]:
-        """Validate ECS cluster exists and is active"""
+        # Validate ECS Cluster
+        print("\nChecking ECS Cluster:")
         try:
-            response = self.clients['ecs'].describe_clusters(
-                clusters=['ml-training-cluster']
-            )
-            if not response['clusters']:
-                return False, "Cluster not found"
-            cluster = response['clusters'][0]
-            if cluster['status'] != 'ACTIVE':
-                return False, f"Cluster status: {cluster['status']}"
-            return True, "OK"
+            response = ecs.describe_clusters(clusters=['ml-training-cluster'])
+            if response['clusters'] and response['clusters'][0]['status'] == 'ACTIVE':
+                print("✅ ml-training-cluster: ACTIVE")
+                cluster_exists = True
+            else:
+                print("❌ ml-training-cluster: NOT ACTIVE")
+                cluster_exists = False
         except Exception as e:
-            return False, str(e)
+            print(f"❌ ml-training-cluster: {str(e)}")
+            cluster_exists = False
 
-    def validate_cloudwatch_dashboard(self) -> Tuple[bool, str]:
-        """Validate CloudWatch dashboard exists"""
+        # Validate CloudWatch Dashboard
+        print("\nChecking CloudWatch Dashboard:")
         try:
-            response = self.clients['cloudwatch'].get_dashboard(
-                DashboardName='MLTrainingDashboard'
-            )
-            return True, "OK"
-        except self.clients['cloudwatch'].exceptions.ResourceNotFound:
-            return False, "Dashboard not found"
+            cloudwatch.get_dashboard(DashboardName='MLTrainingDashboard')
+            print("✅ MLTrainingDashboard: EXISTS")
+            dashboard_exists = True
         except Exception as e:
-            return False, str(e)
+            print(f"❌ MLTrainingDashboard: {str(e)}")
+            dashboard_exists = False
 
-    def validate_cloudwatch_alarms(self) -> Tuple[bool, Dict[str, str]]:
-        """Validate CloudWatch alarms exist"""
-        results = {}
-        for alert in self.config['monitoring']['alerts']:
+        # Validate CloudWatch Alarms
+        print("\nChecking CloudWatch Alarms:")
+        alarms_exist = True
+        for alert in config['monitoring']['alerts']:
             alarm_name = f"MLTraining_{alert['metric']}"
             try:
-                response = self.clients['cloudwatch'].describe_alarms(
-                    AlarmNames=[alarm_name]
-                )
-                if not response['MetricAlarms']:
-                    results[alarm_name] = "Alarm not found"
+                response = cloudwatch.describe_alarms(AlarmNames=[alarm_name])
+                if response['MetricAlarms']:
+                    print(f"✅ {alarm_name}: EXISTS")
                 else:
-                    results[alarm_name] = "OK"
+                    print(f"❌ {alarm_name}: NOT FOUND")
+                    alarms_exist = False
             except Exception as e:
-                results[alarm_name] = str(e)
-        
-        return all(status == "OK" for status in results.values()), results
+                print(f"❌ {alarm_name}: {str(e)}")
+                alarms_exist = False
 
-    def run_all_validations(self) -> Dict[str, Dict]:
-        """Run all validation checks with detailed results"""
-        s3_success, s3_details = self.validate_s3_buckets()
-        ecs_success, ecs_details = self.validate_ecs_cluster()
-        dashboard_success, dashboard_details = self.validate_cloudwatch_dashboard()
-        alarms_success, alarms_details = self.validate_cloudwatch_alarms()
-        
-        return {
-            'S3 Buckets': {
-                'success': s3_success,
-                'details': s3_details
-            },
-            'ECS Cluster': {
-                'success': ecs_success,
-                'details': ecs_details
-            },
-            'CloudWatch Dashboard': {
-                'success': dashboard_success,
-                'details': dashboard_details
-            },
-            'CloudWatch Alarms': {
-                'success': alarms_success,
-                'details': alarms_details
-            }
+        # Overall validation result
+        print("\nValidation Summary:")
+        print("==================")
+        validations = {
+            "S3 Buckets": all_buckets_exist,
+            "ECS Cluster": cluster_exists,
+            "CloudWatch Dashboard": dashboard_exists,
+            "CloudWatch Alarms": alarms_exist
         }
 
-def print_validation_results(results: Dict, verbose: bool = False):
-    """Print validation results in a formatted way"""
-    print("\nDeployment Validation Results:")
-    print("=============================")
-    all_success = True
-    
-    for component, result in results.items():
-        status = '✅ PASS' if result['success'] else '❌ FAIL'
-        print(f"{component}: {status}")
+        for resource, status in validations.items():
+            print(f"{resource}: {'✅ PASS' if status else '❌ FAIL'}")
+
+        all_passed = all(validations.values())
+        print(f"\nOverall Status: {'✅ ALL CHECKS PASSED' if all_passed else '❌ SOME CHECKS FAILED'}")
         
-        if verbose or not result['success']:
-            details = result['details']
-            if isinstance(details, dict):
-                for key, value in details.items():
-                    print(f"  - {key}: {value}")
-            else:
-                print(f"  - Details: {details}")
-        
-        if not result['success']:
-            all_success = False
-    
-    print("\n" + ("✅ All validations passed successfully!" if all_success else "❌ Some validations failed. See details above."))
-    return all_success
+        return all_passed
+
+    except Exception as e:
+        print(f"\n❌ Validation failed with error: {e}")
+        return False
 
 def main():
     parser = argparse.ArgumentParser(description='Validate ML infrastructure deployment')
     parser.add_argument('--config', required=True, help='Path to configuration YAML')
-    parser.add_argument('--verbose', '-v', action='store_true', help='Show detailed results', default=False)
+    parser.add_argument('--verbose', '-v', action='store_true', help='Show detailed results')
     args = parser.parse_args()
-    
-    config_path = Path(args.config)
-    if not config_path.exists():
-        print(f"Configuration file not found: {config_path}")
-        return 1
-    
-    validator = DeploymentValidator(args.config)
-    results = validator.run_all_validations()
-    success = print_validation_results(results, args.verbose)
-    
+
+    success = validate_resources(args.config)
     return 0 if success else 1
 
 if __name__ == "__main__":
