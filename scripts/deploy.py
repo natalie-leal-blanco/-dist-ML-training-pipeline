@@ -4,8 +4,8 @@ import yaml
 import sys
 import os
 from pathlib import Path
-import time
 import json
+import time
 
 def create_service_linked_role():
     """Create the ECS service-linked role if it doesn't exist"""
@@ -73,17 +73,46 @@ def create_dashboard_body(config, region):
     
     return json.dumps(dashboard)
 
+def create_cloudwatch_alarms(cloudwatch_client, config):
+    """Create CloudWatch alarms with proper numeric thresholds"""
+    try:
+        for alert in config['monitoring']['alerts']:
+            # Parse threshold value properly
+            condition_parts = alert['condition'].split()
+            operator = condition_parts[0]
+            # Remove any '%' sign and convert to float
+            threshold = float(condition_parts[1].replace('%', ''))
+            
+            cloudwatch_client.put_metric_alarm(
+                AlarmName=f"MLTraining_{alert['metric']}",
+                MetricName=alert['metric'],
+                Namespace='MLTraining',
+                Period=alert.get('window', 300),
+                EvaluationPeriods=2,
+                Threshold=threshold,
+                ComparisonOperator='GreaterThanThreshold' if operator == '>' else 'LessThanThreshold',
+                Statistic='Average',
+                ActionsEnabled=True,
+                Dimensions=[{"Name": "Environment", "Value": "Production"}]
+            )
+            print(f"Created alarm for {alert['metric']}")
+        return True
+    except Exception as e:
+        print(f"Error creating alarms: {e}")
+        print(f"Alert details: {alert}")  # Print the problematic alert
+        return False
+
 def deploy_training_infrastructure(config_path: str):
-    """Deploy the training infrastructure using AWS"""
+    """Deploy the ML training infrastructure"""
     try:
         # Load and validate configuration
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
 
         # Initialize AWS clients
-        ecs = boto3.client('ecs')
-        cloudwatch = boto3.client('cloudwatch')
         s3 = boto3.client('s3')
+        cloudwatch = boto3.client('cloudwatch')
+        ecs = boto3.client('ecs')
         
         # Create service-linked role first
         if not create_service_linked_role():
@@ -103,6 +132,9 @@ def deploy_training_infrastructure(config_path: str):
                 print(f"Created bucket: {bucket}")
             except s3.exceptions.BucketAlreadyExists:
                 print(f"Bucket already exists: {bucket}")
+            except Exception as e:
+                print(f"Error creating bucket {bucket}: {e}")
+                raise e
 
         # Create ECS cluster with retry logic
         max_retries = 3
@@ -136,21 +168,10 @@ def deploy_training_infrastructure(config_path: str):
             print(f"Error creating dashboard: {e}")
             print(f"Dashboard body: {dashboard_body}")
             raise e
-        
-        # Set up CloudWatch alerts
-        for alert in config['monitoring']['alerts']:
-            cloudwatch.put_metric_alarm(
-                AlarmName=f"MLTraining_{alert['metric']}",
-                MetricName=alert['metric'],
-                Namespace='MLTraining',
-                Period=alert.get('window', 300),
-                EvaluationPeriods=2,
-                Threshold=float(alert['condition'].split()[1]),
-                ComparisonOperator='GreaterThanThreshold' if '>' in alert['condition'] else 'LessThanThreshold',
-                ActionsEnabled=True,
-                Statistic='Average'  # Added required field
-            )
-            print(f"Created alarm for {alert['metric']}")
+
+        # Create CloudWatch alarms
+        if not create_cloudwatch_alarms(cloudwatch, config):
+            raise Exception("Failed to create CloudWatch alarms")
         
         print("\nDeployment completed successfully!")
         print("\nResources created:")
@@ -164,8 +185,8 @@ def deploy_training_infrastructure(config_path: str):
         print(f"Error during deployment: {e}")
         return False
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Deploy ML training infrastructure')
+def main():
+    parser = argparse.ArgumentParser(description='Deploy ML infrastructure')
     parser.add_argument('--config', required=True, help='Path to configuration YAML')
     args = parser.parse_args()
     
@@ -174,5 +195,8 @@ if __name__ == "__main__":
         print(f"Configuration file not found: {config_path}")
         sys.exit(1)
         
-    success = deploy_training_infrastructure(str(config_path))
+    success = deploy_training_infrastructure(args.config)
     sys.exit(0 if success else 1)
+
+if __name__ == "__main__":
+    main()

@@ -56,7 +56,7 @@ monitoring:
       condition: "> 5.0"
       window: 300    # seconds
     - metric: "gpu_utilization"
-      condition: "< 50%"
+      condition: "< 50.0"  # Changed from "50%" to "50.0"
       window: 600    # seconds
 
 # Logging Configuration
