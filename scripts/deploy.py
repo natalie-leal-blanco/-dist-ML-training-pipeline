@@ -4,14 +4,74 @@ import yaml
 import sys
 import os
 from pathlib import Path
+import time
+import json
 
-def validate_config(config):
-    """Validate the configuration file"""
-    required_sections = ['infrastructure', 'training', 'monitoring', 'logging']
-    for section in required_sections:
-        if section not in config:
-            raise ValueError(f"Missing required section: {section}")
-    return True
+def create_service_linked_role():
+    """Create the ECS service-linked role if it doesn't exist"""
+    try:
+        iam = boto3.client('iam')
+        try:
+            iam.get_role(RoleName='AWSServiceRoleForECS')
+            print("ECS service-linked role already exists")
+            return True
+        except iam.exceptions.NoSuchEntityException:
+            iam.create_service_linked_role(
+                AWSServiceName='ecs.amazonaws.com'
+            )
+            print("Created ECS service-linked role")
+            time.sleep(10)
+            return True
+    except Exception as e:
+        print(f"Error creating service-linked role: {e}")
+        return False
+
+def create_dashboard_body(config, region):
+    """Create properly formatted dashboard JSON"""
+    widgets = []
+    
+    # Training metrics widget
+    training_metrics = [metric['name'] for metric in config['monitoring']['metrics']]
+    widgets.append({
+        "type": "metric",
+        "x": 0,
+        "y": 0,
+        "width": 12,
+        "height": 6,
+        "properties": {
+            "metrics": [
+                ["MLTraining", metric] for metric in training_metrics
+            ],
+            "period": 300,
+            "stat": "Average",
+            "region": region,
+            "title": "Training Metrics"
+        }
+    })
+    
+    # GPU Utilization widget
+    widgets.append({
+        "type": "metric",
+        "x": 0,
+        "y": 6,
+        "width": 12,
+        "height": 6,
+        "properties": {
+            "metrics": [
+                ["MLTraining", "gpu_utilization"]
+            ],
+            "period": 60,
+            "stat": "Average",
+            "region": region,
+            "title": "GPU Utilization"
+        }
+    })
+    
+    dashboard = {
+        "widgets": widgets
+    }
+    
+    return json.dumps(dashboard)
 
 def deploy_training_infrastructure(config_path: str):
     """Deploy the training infrastructure using AWS"""
@@ -19,13 +79,16 @@ def deploy_training_infrastructure(config_path: str):
         # Load and validate configuration
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
-        validate_config(config)
 
         # Initialize AWS clients
         ecs = boto3.client('ecs')
         cloudwatch = boto3.client('cloudwatch')
         s3 = boto3.client('s3')
         
+        # Create service-linked role first
+        if not create_service_linked_role():
+            raise Exception("Failed to create service-linked role")
+
         # Create S3 buckets
         bucket_prefix = config['infrastructure']['storage']['s3_bucket_prefix']
         buckets = [
@@ -40,40 +103,39 @@ def deploy_training_infrastructure(config_path: str):
                 print(f"Created bucket: {bucket}")
             except s3.exceptions.BucketAlreadyExists:
                 print(f"Bucket already exists: {bucket}")
+
+        # Create ECS cluster with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                cluster_response = ecs.create_cluster(
+                    clusterName='ml-training-cluster',
+                    capacityProviders=['FARGATE_SPOT'],
+                    defaultCapacityProviderStrategy=[{
+                        'capacityProvider': 'FARGATE_SPOT',
+                        'weight': 1
+                    }]
+                )
+                print("Created ECS cluster")
+                break
+            except ecs.exceptions.InvalidParameterException as e:
+                if attempt == max_retries - 1:
+                    raise e
+                print(f"Retrying ECS cluster creation... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(10)
         
-        # Create ECS cluster
-        cluster_response = ecs.create_cluster(
-            clusterName='ml-training-cluster',
-            capacityProviders=['FARGATE_SPOT'],
-            defaultCapacityProviderStrategy=[{
-                'capacityProvider': 'FARGATE_SPOT',
-                'weight': 1
-            }]
-        )
-        
-        # Set up CloudWatch dashboard
-        dashboard_body = {
-            'widgets': [
-                {
-                    'type': 'metric',
-                    'properties': {
-                        'metrics': [
-                            ['MLTraining', metric['name']]
-                            for metric in config['monitoring']['metrics']
-                        ],
-                        'period': 300,
-                        'stat': 'Average',
-                        'region': config['infrastructure']['region'],
-                        'title': 'Training Metrics'
-                    }
-                }
-            ]
-        }
-        
-        cloudwatch.put_dashboard(
-            DashboardName='MLTrainingDashboard',
-            DashboardBody=str(dashboard_body)
-        )
+        # Create CloudWatch dashboard
+        dashboard_body = create_dashboard_body(config, config['infrastructure']['region'])
+        try:
+            cloudwatch.put_dashboard(
+                DashboardName='MLTrainingDashboard',
+                DashboardBody=dashboard_body
+            )
+            print("Created CloudWatch dashboard")
+        except Exception as e:
+            print(f"Error creating dashboard: {e}")
+            print(f"Dashboard body: {dashboard_body}")
+            raise e
         
         # Set up CloudWatch alerts
         for alert in config['monitoring']['alerts']:
@@ -85,10 +147,17 @@ def deploy_training_infrastructure(config_path: str):
                 EvaluationPeriods=2,
                 Threshold=float(alert['condition'].split()[1]),
                 ComparisonOperator='GreaterThanThreshold' if '>' in alert['condition'] else 'LessThanThreshold',
-                ActionsEnabled=True
+                ActionsEnabled=True,
+                Statistic='Average'  # Added required field
             )
+            print(f"Created alarm for {alert['metric']}")
         
-        print("Deployment completed successfully")
+        print("\nDeployment completed successfully!")
+        print("\nResources created:")
+        print("- ECS Cluster: ml-training-cluster")
+        print("- CloudWatch Dashboard: MLTrainingDashboard")
+        print(f"- S3 Buckets: {', '.join(buckets)}")
+        print("- CloudWatch Alarms for metrics")
         return True
         
     except Exception as e:
