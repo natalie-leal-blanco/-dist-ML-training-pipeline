@@ -1,0 +1,69 @@
+# Infrastructure Configuration
+infrastructure:
+  region: us-east-1
+  compute:
+    instance_type: ml.p3.2xlarge
+    min_instances: 1
+    max_instances: 4
+    spot_instances: true
+  storage:
+    s3_bucket_prefix: "ml-training"
+    checkpoint_retention_days: 30
+
+# Data Pipeline Configuration
+data:
+  train_prefix: "train/"
+  val_prefix: "val/"
+  batch_size: 64
+  num_workers: 8
+  prefetch_factor: 2
+
+# Model Configuration
+model:
+  architecture: "resnet50"
+  pretrained: true
+  num_classes: 10
+  checkpointing:
+    save_frequency: 5
+    keep_top_k: 3
+
+# Training Configuration
+training:
+  optimizer:
+    name: "adam"
+    learning_rate: 0.001
+    weight_decay: 1e-4
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 2
+  epochs: 50
+  gradient_clip: 1.0
+  mixed_precision: true
+
+# Monitoring Configuration
+monitoring:
+  metrics:
+    - name: "training_loss"
+      frequency: 100  # steps
+    - name: "validation_accuracy"
+      frequency: 1    # epochs
+    - name: "gpu_utilization"
+      frequency: 60   # seconds
+    - name: "memory_usage"
+      frequency: 60   # seconds
+  alerts:
+    - metric: "training_loss"
+      condition: "> 5.0"
+      window: 300    # seconds
+    - metric: "gpu_utilization"
+      condition: "< 50%"
+      window: 600    # seconds
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  cloudwatch:
+    retention_days: 30
+    log_group: "/ml/training"
+  include_gradients: false
+  profiling: true
